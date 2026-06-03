@@ -1,164 +1,155 @@
-import pygame
+import tkinter as tk
+from tkinter import font
 import subprocess
 import sys
 import os
 
-pygame.init()
-
-# Screen settings
-WIDTH, HEIGHT = 900, 600
-screen = pygame.display.set_mode((WIDTH, HEIGHT))
-clock = pygame.time.Clock()
-pygame.display.set_caption("MineBox - Launcher")
-
-# Colors
-BLACK = (0, 0, 0)
-WHITE = (255, 255, 255)
-CYAN = (0, 255, 255)
-HIGHLIGHT = (0, 200, 255)
-DARK_GRAY = (40, 40, 40)
-GREEN = (60, 150, 70)
-
-# Fonts
-font_title = pygame.font.Font(None, 48)
-font_menu = pygame.font.Font(None, 32)
-font_small = pygame.font.Font(None, 20)
-
-# ASCII Art Logo
-LOGO = [
-    "███╗   ███╗██╗███╗   ██╗███████╗",
-    "████╗ ████║██║████╗  ██║██╔════╝",
-    "██╔████╔██║██║██╔██╗ ██║█████╗",
-    "██║╚██╔╝██║██║██║╚██╗██║██╔══╝",
-    "██║ ╚═╝ ██║██║██║ ╚████║███████╗",
-    "╚═╝     ╚═╝╚═╝╚═╝  ╚═══╝╚══════╝",
-    "██████╗  ██████╗ ██╗  ██╗",
-    "██╔══██╗██╔═══██╗╚██╗██╔╝",
-    "██████╔╝██║   ██║ ╚███╔╝",
-    "██╔══██╗██║   ██║ ██╔██╗",
-    "██████╔╝╚██████╔╝██╔╝ ██╗",
-    "╚═════╝  ╚═════╝ ╚═╝  ╚═╝"
-]
-
-# Menu options
-menu_options = [
-    {"name": "SINGLE-PLAYER (BETA)", "file": "minebox.py", "desc": "Solo experience with menu & music"},
-    {"name": "MULTIPLAYER (FULL GAME)", "file": "minebox_backup.py", "desc": "Play with friends on LAN"},
-    {"name": "QUIT", "file": None, "desc": "Exit launcher"}
-]
-
-selected_option = 0
-
-def draw_launcher():
-    screen.fill(BLACK)
+class MineBoxLauncher:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("MineBox - Launcher")
+        self.root.geometry("900x600")
+        self.root.configure(bg="#141928")
+        self.root.resizable(False, False)
+        
+        # Center window on screen
+        self.root.update_idletasks()
+        x = (self.root.winfo_screenwidth() // 2) - (450)
+        y = (self.root.winfo_screenheight() // 2) - (300)
+        self.root.geometry(f"+{x}+{y}")
+        
+        self.selected_option = 0
+        self.menu_options = [
+            {"name": "SINGLE-PLAYER (BETA)", "file": "minebox.py", "desc": "Solo experience with menu & music"},
+            {"name": "MULTIPLAYER (FULL GAME)", "file": "minebox_backup.py", "desc": "Play with friends on LAN"},
+            {"name": "QUIT", "file": None, "desc": "Exit launcher"}
+        ]
+        
+        self.setup_ui()
+        self.bind_keys()
+        self.update_display()
     
-    # Draw logo
-    y_offset = 30
-    font_logo = pygame.font.Font(None, 16)
-    for line in LOGO:
-        text_surf = font_logo.render(line, True, CYAN)
-        text_rect = text_surf.get_rect(center=(WIDTH // 2, y_offset))
-        screen.blit(text_surf, text_rect)
-        y_offset += 14
+    def setup_ui(self):
+        # Main frame
+        main_frame = tk.Frame(self.root, bg="#141928")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Logo frame
+        logo_frame = tk.Frame(main_frame, bg="#141928")
+        logo_frame.pack(pady=20)
+        
+        # ASCII Logo
+        logo_text = """███╗   ███╗██╗███╗   ██╗███████╗
+████╗ ████║██║████╗  ██║██╔════╝
+██╔████╔██║██║██╔██╗ ██║█████╗
+██║╚██╔╝██║██║██║╚██╗██║██╔══╝
+██║ ╚═╝ ██║██║██║ ╚████║███████╗
+╚═╝     ╚═╝╚═╝╚═╝  ╚═══╝╚══════╝
+
+██████╗  ██████╗ ██╗  ██╗
+██╔══██╗██╔═══██╗╚██╗██╔╝
+██████╔╝██║   ██║ ╚███╔╝
+██╔══██╗██║   ██║ ██╔██╗
+██████╔╝╚██████╔╝██╔╝ ██╗
+╚═════╝  ╚═════╝ ╚═╝  ╚═╝"""
+        
+        logo_font = font.Font(family="Courier", size=8)
+        logo_label = tk.Label(logo_frame, text=logo_text, font=logo_font, fg="#00FFFF", bg="#141928")
+        logo_label.pack()
+        
+        # Launcher title
+        title_font = font.Font(family="Courier", size=24, weight="bold")
+        title_label = tk.Label(main_frame, text="LAUNCHER", font=title_font, fg="#3C9646", bg="#141928")
+        title_label.pack(pady=10)
+        
+        # Menu frame
+        self.menu_frame = tk.Frame(main_frame, bg="#141928")
+        self.menu_frame.pack(pady=20, expand=True)
+        
+        # Create menu buttons
+        self.menu_labels = []
+        for i in range(len(self.menu_options)):
+            label = tk.Label(
+                self.menu_frame,
+                text="",
+                font=font.Font(family="Courier", size=12),
+                bg="#141928",
+                fg="white",
+                padx=20,
+                pady=10
+            )
+            label.pack(pady=10)
+            self.menu_labels.append(label)
+        
+        # Instructions frame
+        inst_frame = tk.Frame(main_frame, bg="#141928")
+        inst_frame.pack(side=tk.BOTTOM, pady=20)
+        
+        inst_font = font.Font(family="Courier", size=9)
+        instructions = tk.Label(
+            inst_frame,
+            text="Use UP/DOWN arrows to select, ENTER to launch",
+            font=inst_font,
+            fg="#646464",
+            bg="#141928"
+        )
+        instructions.pack()
     
-    # Draw "LAUNCHER" subtitle
-    subtitle = font_title.render("LAUNCHER", True, GREEN)
-    subtitle_rect = subtitle.get_rect(center=(WIDTH // 2, y_offset + 10))
-    screen.blit(subtitle, subtitle_rect)
+    def bind_keys(self):
+        self.root.bind("<Up>", lambda e: self.move_selection(-1))
+        self.root.bind("<Down>", lambda e: self.move_selection(1))
+        self.root.bind("<Return>", lambda e: self.launch_selected())
     
-    # Draw menu options
-    menu_y_start = 280
-    menu_spacing = 70
+    def move_selection(self, direction):
+        self.selected_option = (self.selected_option + direction) % len(self.menu_options)
+        self.update_display()
     
-    for i, option in enumerate(menu_options):
-        if i == selected_option:
-            # Draw selection box background
-            box_width = 500
-            box_height = 55
-            box_x = WIDTH // 2 - box_width // 2
-            box_y = menu_y_start + i * menu_spacing - 5
+    def update_display(self):
+        for i, label in enumerate(self.menu_labels):
+            option = self.menu_options[i]
             
-            pygame.draw.rect(screen, HIGHLIGHT, (box_x, box_y, box_width, box_height), 3)
-            
-            color = HIGHLIGHT
-            prefix = "▶ "
-        else:
-            color = WHITE
-            prefix = "  "
+            if i == self.selected_option:
+                # Highlighted option
+                label.configure(
+                    text=f"▶ {option['name']}\n  {option['desc']}",
+                    fg="#00C8FF",
+                    bg="#141928"
+                )
+                label.config(relief=tk.SOLID, borderwidth=2, bd=2)
+            else:
+                # Normal option
+                label.configure(
+                    text=f"  {option['name']}\n  {option['desc']}",
+                    fg="white",
+                    bg="#141928"
+                )
+                label.config(relief=tk.FLAT, borderwidth=0)
+    
+    def launch_selected(self):
+        selected_item = self.menu_options[self.selected_option]
         
-        # Draw option name
-        name_surf = font_menu.render(prefix + option["name"], True, color)
-        name_rect = name_surf.get_rect(center=(WIDTH // 2, menu_y_start + i * menu_spacing))
-        screen.blit(name_surf, name_rect)
+        if selected_item["file"] is None:  # QUIT
+            self.root.quit()
+            return
         
-        # Draw description
-        desc_surf = font_small.render(option["desc"], True, (150, 150, 150))
-        desc_rect = desc_surf.get_rect(center=(WIDTH // 2, menu_y_start + i * menu_spacing + 25))
-        screen.blit(desc_surf, desc_rect)
+        # Launch the game
+        self.launch_game(selected_item["file"], selected_item["name"])
     
-    # Draw instructions
-    instructions = font_small.render("Use UP/DOWN arrows to select, ENTER to launch", True, (100, 100, 100))
-    instructions_rect = instructions.get_rect(center=(WIDTH // 2, HEIGHT - 30))
-    screen.blit(instructions, instructions_rect)
-    
-    pygame.display.flip()
-
-def launch_game(filename):
-    """Launch a game file"""
-    if filename is None:
-        return False
-    
-    # Get the directory of the launcher script
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    game_path = os.path.join(base_dir, filename)
-    
-    if not os.path.exists(game_path):
-        print(f"Error: {filename} not found!")
-        return False
-    
-    try:
-        # Launch the game in a new process
-        subprocess.Popen([sys.executable, game_path])
-        return True
-    except Exception as e:
-        print(f"Error launching game: {e}")
-        return False
-
-def launcher_loop():
-    global selected_option
-    
-    running = True
-    while running:
-        clock.tick(60)
+    def launch_game(self, filename, name):
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        game_path = os.path.join(base_dir, filename)
         
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                return False
-            
-            if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_UP:
-                    selected_option = (selected_option - 1) % len(menu_options)
-                
-                if event.key == pygame.K_DOWN:
-                    selected_option = (selected_option + 1) % len(menu_options)
-                
-                if event.key == pygame.K_RETURN:
-                    selected_item = menu_options[selected_option]
-                    
-                    if selected_item["file"] is None:  # QUIT
-                        return False
-                    else:
-                        # Launch the game
-                        if launch_game(selected_item["file"]):
-                            print(f"Launching {selected_item['name']}...")
-                            return True
-                        else:
-                            print("Failed to launch game")
+        if not os.path.exists(game_path):
+            print(f"Error: {filename} not found!")
+            return
         
-        draw_launcher()
-    
-    return False
+        try:
+            print(f"Launching {name}...")
+            subprocess.Popen([sys.executable, game_path])
+        except Exception as e:
+            print(f"Error launching game: {e}")
 
 if __name__ == "__main__":
-    launcher_loop()
-    pygame.quit()
+    root = tk.Tk()
+    launcher = MineBoxLauncher(root)
+    root.mainloop()
