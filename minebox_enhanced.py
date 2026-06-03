@@ -20,24 +20,6 @@ RAYS = 120
 MAX_DEPTH = 400
 TILE = 64
 
-# ---------------- PATH ----------------
-BASE = os.path.dirname(__file__)
-
-def load_tex(name, fallback):
-    try:
-        path = os.path.join(BASE, "assets", name)
-        img = pygame.image.load(path).convert_alpha()
-        return pygame.transform.scale(img, (64, 64))
-    except:
-        surf = pygame.Surface((64, 64))
-        surf.fill(fallback)
-        return surf
-
-# ---------------- TEXTURES ----------------
-wall_tex = load_tex("wall.png", (120,120,120))
-grass_tex = load_tex("grass.png", (80,200,90))
-wood_tex = load_tex("wood.png", (139,90,40))
-
 # ---------------- LAN ----------------
 SERVER_IP = "127.0.0.1"
 PORT = 5555
@@ -49,36 +31,40 @@ world = {}
 pid = str(uuid.uuid4())
 
 # Player state
-px, py = 100, 100
-pa = 0
-speed = 3
+px, py = 100.0, 100.0
+pa = 0.0
+speed = 3.0
 health = 100
 max_health = 100
-current_dimension = "overworld"  # overworld, nether, end
-inventory = {}  # {block_type: count}
+current_dimension = "overworld"
+inventory = {}
 selected_block = 0
 
 def lan_start():
     global sock
-    sock = socket.socket()
-    sock.connect((SERVER_IP, PORT))
+    try:
+        sock = socket.socket()
+        sock.connect((SERVER_IP, PORT))
+        sock.settimeout(1.0)
 
-    def recv():
-        global players, villagers, world, health
-        while True:
-            try:
-                data = sock.recv(4096).decode()
-                if data:
-                    msg = json.loads(data)
-                    players = msg.get("players", {})
-                    villagers = msg.get("villagers", {})
-                    world = msg.get("world", {})
-                    if "damage" in msg:
-                        health -= msg["damage"]
-            except:
-                break
+        def recv():
+            global players, villagers, world, health
+            while True:
+                try:
+                    data = sock.recv(4096).decode()
+                    if data:
+                        msg = json.loads(data)
+                        players = msg.get("players", {})
+                        villagers = msg.get("villagers", {})
+                        world = msg.get("world", {})
+                except socket.timeout:
+                    pass
+                except:
+                    break
 
-    threading.Thread(target=recv, daemon=True).start()
+        threading.Thread(target=recv, daemon=True).start()
+    except:
+        print("Could not connect to server. Make sure server_enhanced.py is running!")
 
 def send(x, y, a, action=None):
     if sock:
@@ -97,69 +83,95 @@ def send(x, y, a, action=None):
         except:
             pass
 
-# ---------------- WORLD ----------------
-def height(x):
-    return int(6 + math.sin(x*0.1)*4)
+# ============ WORLD GENERATION ============
+def height(x, dim="overworld"):
+    if dim == "nether":
+        return int(4 + math.sin(x * 0.08) * 3)
+    elif dim == "end":
+        return int(8 + math.sin(x * 0.12) * 4)
+    else:
+        return int(6 + math.sin(x * 0.1) * 4)
 
 def get_block(x, y, dim="overworld"):
-    key = (int(x//TILE), int(y//TILE), dim)
-    if key in world:
-        return world[key]
-
-    if dim == "nether":
-        h = height(x) - 5
-        color = 1
-    elif dim == "end":
-        h = height(x) + 5
-        color = 2
-    else:  # overworld
-        h = height(x)
-        color = 2
-
-    if y < h:
-        return 0
-    if y == h:
-        return color
-    return 1
-
-# ---------------- MINING ----------------
-def mine():
-    global inventory, world
-    gx = int(px // TILE)
-    gy = int(py // TILE)
-    key = (gx, gy, current_dimension)
+    """Get block type at position"""
+    gx = int(x // TILE)
+    gy = int(y // TILE)
+    key = (gx, gy, dim)
     
-    block = get_block(px, py, current_dimension)
-    if block:
-        world[key] = 0
-        inventory[str(block)] = inventory.get(str(block), 0) + 1
-        send(px, py, pa, {"type": "mine", "x": gx, "y": gy})
+    # Check if block was mined
+    if key in world and world[key] == 0:
+        return 0
+    
+    # Generate terrain
+    h = height(gx, dim)
+    
+    if gy < h:
+        return 0  # Empty space
+    elif gy == h:
+        return 2  # Grass/top block
+    else:
+        return 1  # Stone/wall block
 
-# ---------------- COMBAT ----------------
+# ============ MINING ============
+def mine():
+    global inventory
+    # Cast ray forward from player
+    dx = math.cos(pa)
+    dy = math.sin(pa)
+    
+    # Check block in front of player (within mining range)
+    for dist in range(1, 100):
+        tx = px + dx * dist
+        ty = py + dy * dist
+        
+        block = get_block(tx, ty, current_dimension)
+        if block != 0:
+            gx = int(tx // TILE)
+            gy = int(ty // TILE)
+            key = (gx, gy, current_dimension)
+            
+            world[key] = 0
+            
+            # Add to inventory
+            block_type = str(block)
+            inventory[block_type] = inventory.get(block_type, 0) + 1
+            
+            send(px, py, pa, {"type": "mine", "x": gx, "y": gy})
+            break
+
+# ============ COMBAT ============
 def attack():
     global health
-    # Check if attacking any villagers
-    attack_range = 50
+    dx = math.cos(pa)
+    dy = math.sin(pa)
+    
+    # Check for villagers in range
+    attack_range = 80
     for vid, villager in villagers.items():
         vx, vy = villager["x"], villager["y"]
+        
+        if villager.get("dimension") != current_dimension:
+            continue
+        
         dist = math.sqrt((px - vx)**2 + (py - vy)**2)
         if dist < attack_range:
             send(px, py, pa, {"type": "attack_villager", "id": vid})
 
-# ---------------- DIMENSION TRAVEL ----------------
+# ============ DIMENSION TRAVEL ============
 def change_dimension(new_dim):
     global current_dimension, px, py
     current_dimension = new_dim
-    # Respawn at dimension-specific coordinates
+    
     if new_dim == "nether":
-        px, py = 200, 200
+        px, py = 200.0, 200.0
     elif new_dim == "end":
-        px, py = 300, 100
+        px, py = 300.0, 100.0
     else:
-        px, py = 100, 100
+        px, py = 100.0, 100.0
+    
     send(px, py, pa, {"type": "dimension_change", "dimension": new_dim})
 
-# ---------------- SKY ----------------
+# ============ RENDERING ============
 def draw_sky():
     if current_dimension == "overworld":
         color_top = (70, 140, 220)
@@ -171,14 +183,13 @@ def draw_sky():
         color_top = (10, 10, 30)
         color_bot = (30, 30, 50)
     
-    for y in range(HEIGHT//2):
-        t = y/(HEIGHT//2)
+    for y in range(HEIGHT // 2):
+        t = y / (HEIGHT // 2)
         r = int(color_top[0] + (color_bot[0] - color_top[0]) * t)
         g = int(color_top[1] + (color_bot[1] - color_top[1]) * t)
         b = int(color_top[2] + (color_bot[2] - color_top[2]) * t)
         pygame.draw.line(screen, (r, g, b), (0, y), (WIDTH, y))
 
-# ---------------- FLOOR ----------------
 def draw_floor():
     if current_dimension == "overworld":
         color = (40, 120, 40)
@@ -187,164 +198,194 @@ def draw_floor():
     else:  # end
         color = (20, 20, 40)
     
-    for y in range(HEIGHT//2, HEIGHT):
+    for y in range(HEIGHT // 2, HEIGHT):
         pygame.draw.line(screen, color, (0, y), (WIDTH, y))
 
-# ---------------- TEXTURE ----------------
-def get_tex(b):
-    if b == 1: return wall_tex
-    if b == 2: return wood_tex
-    return grass_tex
-
-# ---------------- RAYCAST ----------------
-def cast():
+def cast_rays():
+    """Raycasting engine"""
     draw_sky()
     draw_floor()
-
-    start = pa - FOV/2
-    step = FOV/RAYS
-
-    for r in range(RAYS):
-        a = start + r*step
-
-        sin_a = math.sin(a)
-        cos_a = math.cos(a)
-
-        for d in range(1, MAX_DEPTH):
-            tx = px + cos_a*d
-            ty = py + sin_a*d
-
-            b = get_block(tx, ty, current_dimension)
-
-            if b:
-                dist = d * math.cos(pa - a)
-                if dist < 0.0001:
-                    dist = 0.0001
-
-                h = HEIGHT / (dist * 0.02)
-
-                tex = get_tex(b)
-
-                hit = int((tx % TILE) / TILE * 63)
-                hit = max(0, min(63, hit))
-
-                col = tex.subsurface((hit,0,1,64))
-                col = pygame.transform.scale(col,(WIDTH//RAYS,int(h)))
-
-                shade = max(0.35, 1 - dist/900)
-                col.fill((shade*255,shade*255,shade*255),
-                         special_flags=pygame.BLEND_MULT)
-
-                screen.blit(col,(r*(WIDTH//RAYS),HEIGHT//2 - h//2))
+    
+    start_angle = pa - FOV / 2
+    angle_step = FOV / RAYS
+    
+    for ray_idx in range(RAYS):
+        current_angle = start_angle + ray_idx * angle_step
+        
+        cos_a = math.cos(current_angle)
+        sin_a = math.sin(current_angle)
+        
+        # Cast ray until we hit a block
+        for distance in range(1, MAX_DEPTH):
+            target_x = px + cos_a * distance
+            target_y = py + sin_a * distance
+            
+            block_type = get_block(target_x, target_y, current_dimension)
+            
+            if block_type != 0:  # Hit a block
+                # Fix fish-eye effect
+                corrected_dist = distance * math.cos(pa - current_angle)
+                
+                if corrected_dist < 0.1:
+                    corrected_dist = 0.1
+                
+                # Calculate wall height
+                wall_height = int(HEIGHT / (corrected_dist * 0.02))
+                
+                # Choose color based on block type
+                if block_type == 2:
+                    base_color = (60, 180, 60)  # Grass - green
+                else:
+                    base_color = (120, 120, 120)  # Stone - grey
+                
+                # Apply distance-based shading
+                shade = max(0.3, 1.0 - (corrected_dist / 800.0))
+                final_color = (
+                    int(base_color[0] * shade),
+                    int(base_color[1] * shade),
+                    int(base_color[2] * shade)
+                )
+                
+                # Draw wall slice
+                x_pos = ray_idx * (WIDTH // RAYS)
+                y_pos = HEIGHT // 2 - wall_height // 2
+                
+                pygame.draw.rect(
+                    screen,
+                    final_color,
+                    (x_pos, y_pos, WIDTH // RAYS + 1, wall_height)
+                )
                 break
 
-# ---------------- HUD ----------------
 def draw_hud():
-    font = pygame.font.Font(None, 24)
+    font_small = pygame.font.Font(None, 20)
+    font_large = pygame.font.Font(None, 24)
     
     # Health bar
-    health_text = font.render(f"Health: {health}/{max_health}", True, (255, 0, 0))
+    health_text = font_large.render(f"Health: {health}/{max_health}", True, (255, 100, 100))
     screen.blit(health_text, (10, 10))
     
-    # Dimension display
-    dim_text = font.render(f"Dimension: {current_dimension.upper()}", True, (100, 200, 255))
-    screen.blit(dim_text, (10, 40))
+    # Dimension
+    dim_text = font_small.render(f"Dimension: {current_dimension.upper()}", True, (100, 200, 255))
+    screen.blit(dim_text, (10, 35))
     
-    # Inventory display
-    inv_text = font.render("Inventory:", True, (255, 255, 255))
-    screen.blit(inv_text, (10, 70))
+    # Inventory header
+    inv_text = font_small.render("Inventory:", True, (200, 200, 200))
+    screen.blit(inv_text, (10, 55))
     
-    y_offset = 100
-    for block_type, count in inventory.items():
-        item_text = font.render(f"Block {block_type}: {count}", True, (200, 200, 200))
-        screen.blit(item_text, (10, y_offset))
-        y_offset += 25
+    # Inventory items
+    y_offset = 75
+    if inventory:
+        for block_type, count in sorted(inventory.items()):
+            item_text = font_small.render(f"Block {block_type}: {count}x", True, (150, 200, 150))
+            screen.blit(item_text, (10, y_offset))
+            y_offset += 20
+    else:
+        empty_text = font_small.render("(empty)", True, (100, 100, 100))
+        screen.blit(empty_text, (10, y_offset))
     
     # Instructions
+    inst_y = HEIGHT - 100
     instructions = [
-        "SPACE: Mine",
-        "E: Attack",
-        "1-3: Change Dimension",
-        "Q: Drop Item"
+        "SPACE: Mine | E: Attack | Q: Drop",
+        "1: Overworld | 2: Nether | 3: End"
     ]
-    y_offset = HEIGHT - 120
     for inst in instructions:
-        inst_text = font.render(inst, True, (150, 150, 150))
-        screen.blit(inst_text, (WIDTH - 200, y_offset))
-        y_offset += 25
+        inst_text = font_small.render(inst, True, (150, 150, 150))
+        screen.blit(inst_text, (WIDTH - len(inst) * 8 - 10, inst_y))
+        inst_y += 20
 
-# START LAN
+# ============ START ============
 lan_start()
 
-# MAIN LOOP
-run = True
-while run:
+running = True
+while running:
     clock.tick(60)
-
+    
     keys = pygame.key.get_pressed()
-
-    for e in pygame.event.get():
-        if e.type == pygame.QUIT:
-            run = False
-        if e.type == pygame.KEYDOWN:
-            if e.key == pygame.K_SPACE:
+    
+    # Input
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            running = False
+        
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_SPACE:
                 mine()
-            if e.key == pygame.K_e:
+            if event.key == pygame.K_e:
                 attack()
-            if e.key == pygame.K_1:
+            if event.key == pygame.K_1:
                 change_dimension("overworld")
-            if e.key == pygame.K_2:
+            if event.key == pygame.K_2:
                 change_dimension("nether")
-            if e.key == pygame.K_3:
+            if event.key == pygame.K_3:
                 change_dimension("end")
-            if e.key == pygame.K_q:
+            if event.key == pygame.K_q:
                 if inventory:
                     last_item = list(inventory.keys())[-1]
                     inventory[last_item] -= 1
-                    if inventory[last_item] == 0:
+                    if inventory[last_item] <= 0:
                         del inventory[last_item]
-
-    mx, my = pygame.mouse.get_rel()
-    pa += mx * 0.002
-
-    dx = math.cos(pa) * speed
-    dy = math.sin(pa) * speed
-
+    
+    # Movement
+    mouse_x, mouse_y = pygame.mouse.get_rel()
+    pa += mouse_x * 0.005
+    
+    move_x = math.cos(pa) * speed
+    move_y = math.sin(pa) * speed
+    
     if keys[pygame.K_w]:
-        px += dx
-        py += dy
+        px += move_x
+        py += move_y
     if keys[pygame.K_s]:
-        px -= dx
-        py -= dy
+        px -= move_x
+        py -= move_y
     if keys[pygame.K_a]:
-        px -= dy
-        py += dx
+        px -= move_y
+        py += move_x
     if keys[pygame.K_d]:
-        px += dy
-        py -= dx
-
-    cast()
-    draw_hud()
-    send(px, py, pa)
-
-    # Draw other players
-    for i, p in players.items():
-        if i == pid:
+        px += move_y
+        py -= move_x
+    
+    # Rendering
+    cast_rays()
+    
+    # Draw players
+    for pid_other, player in players.items():
+        if pid_other == pid:
             continue
-        if p.get("dimension") != current_dimension:
+        if player.get("dimension") != current_dimension:
             continue
-        sx = int(p["x"] - px + WIDTH//2)
-        sy = int(p["y"] - py + HEIGHT//2)
-        pygame.draw.circle(screen, (0, 0, 255), (sx, sy), 6)
-
+        
+        other_x = player["x"]
+        other_y = player["y"]
+        
+        screen_x = WIDTH // 2 + (other_x - px)
+        screen_y = HEIGHT // 2 + (other_y - py)
+        
+        if 0 < screen_x < WIDTH and 0 < screen_y < HEIGHT:
+            pygame.draw.circle(screen, (0, 100, 255), (int(screen_x), int(screen_y)), 6)
+    
     # Draw villagers
-    for vid, v in villagers.items():
-        if v.get("dimension") != current_dimension:
+    for vid, villager in villagers.items():
+        if villager.get("dimension") != current_dimension:
             continue
-        sx = int(v["x"] - px + WIDTH//2)
-        sy = int(v["y"] - py + HEIGHT//2)
-        pygame.draw.circle(screen, (100, 200, 100), (sx, sy), 8)
-
+        
+        vx = villager["x"]
+        vy = villager["y"]
+        
+        screen_x = WIDTH // 2 + (vx - px)
+        screen_y = HEIGHT // 2 + (vy - py)
+        
+        if 0 < screen_x < WIDTH and 0 < screen_y < HEIGHT:
+            pygame.draw.circle(screen, (100, 200, 100), (int(screen_x), int(screen_y)), 8)
+    
+    # Draw HUD
+    draw_hud()
+    
+    # Send state
+    send(px, py, pa)
+    
     pygame.display.flip()
 
 pygame.quit()
