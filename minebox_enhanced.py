@@ -41,42 +41,20 @@ health = 100
 max_health = 100
 current_dimension = "overworld"
 inventory = {}
-equipped_item = None  # sword, pickaxe, food
+equipped_item = None
 selected_block = 0
 
-# ============ TEXTURES ============
-def create_textures():
-    """Create simple block textures"""
-    textures = {}
-    
-    # Grass block
-    grass_tex = pygame.Surface((64, 64))
-    grass_tex.fill((60, 180, 60))
-    pygame.draw.line(grass_tex, (80, 200, 80), (0, 32), (64, 32), 2)
-    textures["grass"] = grass_tex
-    
-    # Stone block
-    stone_tex = pygame.Surface((64, 64))
-    stone_tex.fill((120, 120, 120))
-    for x in range(0, 64, 16):
-        for y in range(0, 64, 16):
-            pygame.draw.rect(stone_tex, (100, 100, 100), (x, y, 14, 14))
-    textures["stone"] = stone_tex
-    
-    # Wood block
-    wood_tex = pygame.Surface((64, 64))
-    wood_tex.fill((139, 90, 40))
-    pygame.draw.rect(wood_tex, (160, 110, 50), (10, 10, 44, 44), 2)
-    textures["wood"] = wood_tex
-    
-    # Dirt block
-    dirt_tex = pygame.Surface((64, 64))
-    dirt_tex.fill((139, 101, 60))
-    textures["dirt"] = dirt_tex
-    
-    return textures
+# ============ ENTITY SPRITES ============
+def create_entity_sprite(color, size=32):
+    """Create a simple sprite for an entity"""
+    surf = pygame.Surface((size, size), pygame.SRCALPHA)
+    pygame.draw.circle(surf, color, (size//2, size//2), size//2)
+    return surf
 
-textures = create_textures()
+# Create sprites
+zombie_sprite = create_entity_sprite((180, 80, 80), 32)
+villager_sprite = create_entity_sprite((80, 200, 80), 32)
+player_sprite = create_entity_sprite((100, 150, 255), 28)
 
 # ============ ITEMS ============
 ITEMS = {
@@ -84,8 +62,8 @@ ITEMS = {
     "pickaxe": {"damage": 5, "speed_boost": 1.5, "color": (150, 150, 150)},
     "food": {"heal": 20, "color": (255, 150, 100)},
     "wood": {"type": "block", "color": (139, 90, 40)},
-    "stone": {"type": "block", "color": (120, 120, 120)},
-    "grass": {"type": "block", "color": (60, 180, 60)},
+    "stone": {"type": "block", "color": (180, 180, 180)},
+    "grass": {"type": "block", "color": (80, 200, 80)},
 }
 
 def lan_start():
@@ -251,7 +229,7 @@ def pick_up_item():
     """Pick up items on the ground"""
     global inventory
     
-    pickup_range = 50
+    pickup_range = 100
     items_to_remove = []
     
     for item_id, item in items_on_ground.items():
@@ -314,11 +292,82 @@ def draw_floor():
     for y in range(HEIGHT // 2, HEIGHT):
         pygame.draw.line(screen, color, (0, y), (WIDTH, y))
 
+def get_entity_angle_and_distance(entity_x, entity_y):
+    """Calculate angle and distance to entity from player"""
+    dx = entity_x - px
+    dy = entity_y - py
+    
+    dist = math.sqrt(dx**2 + dy**2)
+    angle = math.atan2(dy, dx)
+    
+    return angle, dist
+
 def cast_rays():
-    """Raycasting engine"""
+    """Raycasting engine with entity rendering"""
     draw_sky()
     draw_floor()
     
+    # Collect all entities with their distances
+    entities_to_draw = []
+    
+    # Collect zombies
+    for zid, zombie in zombies.items():
+        if zombie.get("dimension") != current_dimension:
+            continue
+        angle, dist = get_entity_angle_and_distance(zombie["x"], zombie["y"])
+        entities_to_draw.append({
+            "type": "zombie",
+            "angle": angle,
+            "distance": dist,
+            "entity": zombie,
+            "id": zid
+        })
+    
+    # Collect villagers
+    for vid, villager in villagers.items():
+        if villager.get("dimension") != current_dimension:
+            continue
+        angle, dist = get_entity_angle_and_distance(villager["x"], villager["y"])
+        entities_to_draw.append({
+            "type": "villager",
+            "angle": angle,
+            "distance": dist,
+            "entity": villager,
+            "id": vid
+        })
+    
+    # Collect items
+    for item_id, item in items_on_ground.items():
+        if item.get("dimension") != current_dimension:
+            continue
+        angle, dist = get_entity_angle_and_distance(item["x"], item["y"])
+        entities_to_draw.append({
+            "type": "item",
+            "angle": angle,
+            "distance": dist,
+            "entity": item,
+            "id": item_id
+        })
+    
+    # Collect other players
+    for pid_other, player in players.items():
+        if pid_other == pid:
+            continue
+        if player.get("dimension") != current_dimension:
+            continue
+        angle, dist = get_entity_angle_and_distance(player["x"], player["y"])
+        entities_to_draw.append({
+            "type": "player",
+            "angle": angle,
+            "distance": dist,
+            "entity": player,
+            "id": pid_other
+        })
+    
+    # Sort by distance (draw far entities first)
+    entities_to_draw.sort(key=lambda e: e["distance"], reverse=True)
+    
+    # Draw walls first
     start_angle = pa - FOV / 2
     angle_step = FOV / RAYS
     
@@ -363,6 +412,68 @@ def cast_rays():
                     (x_pos, y_pos, WIDTH // RAYS + 1, wall_height)
                 )
                 break
+    
+    # Draw entities
+    for entity_data in entities_to_draw:
+        angle_to_entity = entity_data["angle"]
+        dist_to_entity = entity_data["distance"]
+        
+        if dist_to_entity < 10:
+            dist_to_entity = 10
+        
+        # Calculate screen position
+        angle_diff = angle_to_entity - pa
+        
+        # Normalize angle
+        while angle_diff > math.pi:
+            angle_diff -= 2 * math.pi
+        while angle_diff < -math.pi:
+            angle_diff += 2 * math.pi
+        
+        # Only draw if in FOV
+        if abs(angle_diff) > FOV / 2:
+            continue
+        
+        # Calculate screen X based on angle
+        screen_x = WIDTH / 2 + (angle_diff / (FOV / 2)) * (WIDTH / 2)
+        
+        # Calculate height/size based on distance
+        entity_height = int(HEIGHT / (dist_to_entity * 0.02))
+        
+        if entity_height < 2:
+            entity_height = 2
+        
+        # Calculate screen Y
+        screen_y = HEIGHT // 2 - entity_height // 2
+        
+        # Draw based on entity type
+        entity_type = entity_data["type"]
+        entity = entity_data["entity"]
+        
+        if entity_type == "zombie":
+            color = (180, 80, 80)
+            pygame.draw.rect(screen, color, (int(screen_x) - entity_height // 2, int(screen_y), entity_height, entity_height))
+            # Health bar
+            health_pct = entity.get("health", 20) / 20.0
+            pygame.draw.line(screen, (255, 0, 0), (int(screen_x) - entity_height // 2, int(screen_y) - 5), 
+                           (int(screen_x) - entity_height // 2 + int(entity_height * health_pct), int(screen_y) - 5), 2)
+        
+        elif entity_type == "villager":
+            color = (80, 200, 80)
+            pygame.draw.rect(screen, color, (int(screen_x) - entity_height // 2, int(screen_y), entity_height, entity_height))
+            # Health bar
+            health_pct = entity.get("health", 20) / 20.0
+            pygame.draw.line(screen, (255, 0, 0), (int(screen_x) - entity_height // 2, int(screen_y) - 5),
+                           (int(screen_x) - entity_height // 2 + int(entity_height * health_pct), int(screen_y) - 5), 2)
+        
+        elif entity_type == "player":
+            color = (100, 150, 255)
+            pygame.draw.rect(screen, color, (int(screen_x) - entity_height // 2, int(screen_y), entity_height, entity_height))
+        
+        elif entity_type == "item":
+            item_type = entity.get("type", "stone")
+            color = ITEMS.get(item_type, {}).get("color", (200, 200, 200))
+            pygame.draw.rect(screen, color, (int(screen_x) - 4, int(screen_y), 8, 8))
 
 def draw_hud():
     font_small = pygame.font.Font(None, 18)
@@ -401,7 +512,7 @@ def draw_hud():
     instructions = [
         "SPACE: Mine | E: Attack | F: Use Item",
         "1-3: Dimensions | Q: Drop | P: Pick Up",
-        "S/P/F: Equip Sword/Pickaxe/Food"
+        "S/Shift/F: Equip Sword/Pickaxe/Food"
     ]
     for inst in instructions:
         inst_text = font_small.render(inst, True, (150, 150, 150))
@@ -427,8 +538,6 @@ while running:
                 mine()
             if event.key == pygame.K_e:
                 attack()
-            if event.key == pygame.K_f:
-                use_item()
             if event.key == pygame.K_1:
                 change_dimension("overworld")
             if event.key == pygame.K_2:
@@ -445,10 +554,13 @@ while running:
                 pick_up_item()
             if event.key == pygame.K_s:
                 equip_item("sword")
-            if event.key == pygame.K_SHIFT:
+            if event.key == pygame.K_LSHIFT or event.key == pygame.K_RSHIFT:
                 equip_item("pickaxe")
             if event.key == pygame.K_f:
-                equip_item("food")
+                if equipped_item != "food":
+                    equip_item("food")
+                else:
+                    use_item()
     
     # Movement
     mouse_x, mouse_y = pygame.mouse.get_rel()
@@ -460,9 +572,6 @@ while running:
     if keys[pygame.K_w]:
         px += move_x
         py += move_y
-    if keys[pygame.K_s]:
-        px -= move_x
-        py -= move_y
     if keys[pygame.K_a]:
         px -= move_y
         py += move_x
@@ -472,70 +581,6 @@ while running:
     
     # Rendering
     cast_rays()
-    
-    # Draw items on ground
-    for item_id, item in items_on_ground.items():
-        if item.get("dimension") != current_dimension:
-            continue
-        
-        ix, iy = item["x"], item["y"]
-        screen_x = WIDTH // 2 + (ix - px)
-        screen_y = HEIGHT // 2 + (iy - py)
-        
-        if 0 < screen_x < WIDTH and 0 < screen_y < HEIGHT:
-            item_color = ITEMS.get(item["type"], {}).get("color", (200, 200, 200))
-            pygame.draw.rect(screen, item_color, (int(screen_x) - 3, int(screen_y) - 3, 6, 6))
-    
-    # Draw players
-    for pid_other, player in players.items():
-        if pid_other == pid:
-            continue
-        if player.get("dimension") != current_dimension:
-            continue
-        
-        other_x = player["x"]
-        other_y = player["y"]
-        
-        screen_x = WIDTH // 2 + (other_x - px)
-        screen_y = HEIGHT // 2 + (other_y - py)
-        
-        if 0 < screen_x < WIDTH and 0 < screen_y < HEIGHT:
-            pygame.draw.circle(screen, (0, 100, 255), (int(screen_x), int(screen_y)), 6)
-    
-    # Draw villagers
-    for vid, villager in villagers.items():
-        if villager.get("dimension") != current_dimension:
-            continue
-        
-        vx = villager["x"]
-        vy = villager["y"]
-        
-        screen_x = WIDTH // 2 + (vx - px)
-        screen_y = HEIGHT // 2 + (vy - py)
-        
-        if 0 < screen_x < WIDTH and 0 < screen_y < HEIGHT:
-            pygame.draw.circle(screen, (100, 200, 100), (int(screen_x), int(screen_y)), 8)
-            # Health bar
-            pygame.draw.line(screen, (255, 0, 0), (int(screen_x) - 8, int(screen_y) - 12), (int(screen_x) + 8, int(screen_y) - 12), 2)
-    
-    # Draw zombies
-    for zid, zombie in zombies.items():
-        if zombie.get("dimension") != current_dimension:
-            continue
-        
-        zx = zombie["x"]
-        zy = zombie["y"]
-        
-        screen_x = WIDTH // 2 + (zx - px)
-        screen_y = HEIGHT // 2 + (zy - py)
-        
-        if 0 < screen_x < WIDTH and 0 < screen_y < HEIGHT:
-            pygame.draw.circle(screen, (150, 100, 100), (int(screen_x), int(screen_y)), 10)
-            # Health bar
-            health_pct = zombie.get("health", 20) / 20.0
-            pygame.draw.line(screen, (255, 0, 0), (int(screen_x) - 10, int(screen_y) - 14), (int(screen_x) - 10 + int(20 * health_pct), int(screen_y) - 14), 3)
-    
-    # Draw HUD
     draw_hud()
     
     # Send state
